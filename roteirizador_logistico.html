@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roteirizador Logístico</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{font-family:Arial,Helvetica,sans-serif;color:#202124;background:#f5f6f8}
+*{box-sizing:border-box}body{margin:0}.app{display:grid;grid-template-columns:360px 1fr;min-height:100vh}
+.panel{background:#fff;padding:22px 20px;box-shadow:2px 0 10px #00000012;z-index:2;overflow:auto}
+.brand{font-size:21px;font-weight:700;margin-bottom:5px}.sub{font-size:13px;color:#697078;margin-bottom:22px;line-height:1.45}
+label{display:block;font-size:13px;font-weight:700;margin:15px 0 7px}
+input,textarea{width:100%;border:1px solid #c9cdd2;border-radius:8px;padding:11px 12px;font:14px Arial;color:#202124;background:#fff}
+textarea{height:220px;resize:vertical;line-height:1.55}
+.hint{font-size:12px;color:#6b7280;margin-top:6px;line-height:1.4}
+button{border:0;border-radius:8px;padding:12px 14px;font-size:14px;font-weight:700;cursor:pointer}
+.primary{width:100%;background:#1769d2;color:white;margin-top:18px}.primary:disabled{opacity:.55;cursor:wait}
+.secondary{background:#eef2f7;color:#253246}.actions{display:flex;gap:8px;margin-top:10px}.actions button{flex:1}
+.status{font-size:13px;line-height:1.45;margin-top:14px;padding:11px;border-radius:8px;background:#f1f5f9;color:#334155;min-height:42px}
+.result{display:none;margin-top:15px;border-top:1px solid #e5e7eb;padding-top:14px}.metric{font-size:24px;font-weight:700;color:#1769d2}.muted{font-size:12px;color:#6b7280}
+ol{padding-left:23px;margin:12px 0}li{padding:5px 0;font-size:13px}
+#map{height:100vh;min-height:600px;background:#e5e7eb}
+.badge{display:inline-block;background:#e8f2ff;color:#1557a0;border-radius:5px;padding:4px 7px;font-size:11px;margin:4px 0}
+.disclaimer{font-size:11px;color:#747b84;line-height:1.45;margin-top:16px}
+@media(max-width:800px){.app{grid-template-columns:1fr}.panel{max-height:none}.map-wrap{height:58vh;min-height:420px}#map{height:58vh;min-height:420px}}
+/* Reorganização manual das cidades */
+.delivery-item {
+    cursor: grab;
+    user-select: none;
+}
+
+.delivery-item:active {
+    cursor: grabbing;
+}
+
+.drag-handle {
+    display: inline-block;
+    color: #1769d2;
+    font-weight: bold;
+    margin-right: 8px;
+    cursor: grab;
+}
+
+.sortable-ghost {
+    opacity: 0.35;
+    background: #dbeafe;
+}
+
+.sortable-chosen {
+    background: #eef5ff;
+    border-radius: 6px;
+}
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="panel">
+  <div class="brand">Roteirizador Logístico</div>
+  <div class="sub">Organize entregas por cidade e visualize o percurso otimizado no mapa.</div>
+  <span class="badge">Protótipo gratuito • até 40 cidades de entrega</span>
+  <label for="origin">Ponto de partida</label>
+  <input id="origin" value="Fazenda Rio Grande, PR" placeholder="Ex.: Fazenda Rio Grande, PR">
+  <label for="stops">Cidades de entrega</label>
+  <textarea id="stops" placeholder="Uma cidade por linha. Exemplo:&#10;Guarulhos, SP&#10;Campinas, SP&#10;Franca, SP&#10;São José do Rio Preto, SP"></textarea>
+  <div class="hint">Digite somente uma cidade por linha, sempre com a UF. Máximo de 40 cidades de entrega.</div>
+  <label for="destination">Ponto de chegada / retorno</label>
+  <input id="destination" value="Fazenda Rio Grande, PR" placeholder="Ex.: Fazenda Rio Grande, PR">
+  <button class="primary" id="optimize">OTIMIZAR ROTA</button>
+  <div class="actions">
+    <button class="secondary" id="example">Carregar exemplo</button>
+    <button class="secondary" id="clear">Limpar</button>
+  </div>
+  <div class="status" id="status" role="status" aria-live="polite">Preencha a origem, as cidades de entrega e o destino. A sequência será calculada pelas distâncias rodoviárias disponíveis.</div>
+  <section class="result" id="result">
+    <div class="muted">Distância estimada da rota</div>
+    <div class="metric" id="distance">—</div>
+    <div class="muted" id="stopsCount"></div>
+    <h3 style="font-size:15px;margin:17px 0 5px">Sequência sugerida</h3>
+    <ol id="sequence"></ol>
+
+<div class="actions">
+    <button class="primary" id="updateRoute">ATUALIZAR ROTA</button>
+    <button class="secondary" id="reoptimize">OTIMIZAR NOVAMENTE</button>
+</div>
+
+<button class="secondary" id="copy" style="width:100%;margin-top:10px">
+    Copiar sequência
+</button>
+  </section>
+  <div class="disclaimer">A otimização busca uma sequência de menor distância com base na matriz rodoviária retornada pelo serviço de rotas. É uma estimativa, não uma garantia matemática de ótimo global. O protótipo usa serviços públicos do OpenStreetMap/OSRM, sujeitos a limites e disponibilidade. Não considera restrições para caminhões, pedágios ou condições de trânsito. Para uso operacional frequente, o ideal é contratar/hospedar um serviço de roteamento próprio.</div>
+</aside>
+<main class="map-wrap"><div id="map" role="img" aria-label="Mapa da rota otimizada"></div></main>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
+<script>
+(function(){
+const $=id=>document.getElementById(id);
+const map=L.map('map').setView([-23.5,-51.5],6);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?key=cb1_4ygi_1_251644011f8f2c24b076f4c5',{
+    subdomains:'abcd',
+    maxZoom:19,
+    attribution:'&copy; OpenStreetMap contributors &copy; CARTO'
+}).addTo(map);
+let routeLayer=null, markers=[];
+let currentPoints = null;
+function status(msg){$('status').textContent=msg}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+function parseStops(){return $('stops').value.split(/\n|;/).map(x=>x.trim()).filter(Boolean)}
+async function geocode(place){
+ const url='https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q='+encodeURIComponent(place);
+ const response=await fetch(url,{headers:{'Accept-Language':'pt-BR'}});
+ if(!response.ok) throw new Error('Falha na busca de cidade ('+response.status+'). Tente novamente mais tarde.');
+ const data=await response.json();
+ if(!data.length) throw new Error('Não encontrei: '+place+'. Confira o nome e a UF.');
+ return {name:place,lat:Number(data[0].lat),lon:Number(data[0].lon)};
+}
+function haversine(a,b){
+ const R=6371,rad=x=>x*Math.PI/180,dLat=rad(b.lat-a.lat),dLon=rad(b.lon-a.lon);
+ const q=Math.sin(dLat/2)**2+Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(dLon/2)**2;
+ return 2*R*Math.asin(Math.sqrt(q));
+}
+function pathDistance(path,matrix){let sum=0;for(let i=0;i<path.length-1;i++)sum+=matrix[path[i]][path[i+1]];return sum}
+function nearestNeighbor(matrix,n){
+ let unvisited=new Set(Array.from({length:n-2},(_,i)=>i+1)),path=[0],current=0;
+ while(unvisited.size){let best=null,cost=Infinity;for(const j of unvisited){if(matrix[current][j]<cost){cost=matrix[current][j];best=j}}path.push(best);unvisited.delete(best);current=best}
+ path.push(n-1);return path;
+}
+function twoOpt(path,matrix){
+ let improved=true,passes=0;
+ while(improved&&passes<80){improved=false;passes++;
+  for(let i=1;i<path.length-2;i++){
+   for(let k=i+1;k<path.length-1;k++){
+    const a=path[i-1],b=path[i],c=path[k],d=path[k+1];
+    if(matrix[a][c]+matrix[b][d]+0.0001 < matrix[a][b]+matrix[c][d]){
+      const rev=path.slice(i,k+1).reverse();path.splice(i,rev.length,...rev);improved=true;
+    }
+   }
+  }
+ }
+ return path;
+}
+async function getMatrix(points){
+ const coord=points.map(p=>p.lon+','+p.lat).join(';');
+ const url='https://router.project-osrm.org/table/v1/driving/'+coord+'?annotations=distance';
+ const response=await fetch(url);
+ if(!response.ok) throw new Error('Serviço de distâncias indisponível ('+response.status+'). Tente novamente.');
+ const data=await response.json();
+ if(data.code!=='Ok'||!data.distances) throw new Error('O serviço não conseguiu calcular as distâncias entre todas as cidades.');
+ return data.distances.map(row=>row.map(v=>v==null?Infinity:v/1000));
+}
+async function getRoute(points){
+ const coord=points.map(p=>p.lon+','+p.lat).join(';');
+ const response=await fetch('https://router.project-osrm.org/route/v1/driving/'+coord+'?overview=full&geometries=geojson&steps=false');
+ if(!response.ok)throw new Error('Não foi possível desenhar o trajeto no mapa.');
+ const data=await response.json();
+ if(data.code!=='Ok'||!data.routes?.length)throw new Error('Não foi possível encontrar um trajeto rodoviário contínuo.');
+ return data.routes[0];
+}
+function clearMap(){if(routeLayer)map.removeLayer(routeLayer);markers.forEach(m=>map.removeLayer(m));markers=[]}
+async function updateManualRoute(){
+
+    if(!currentPoints){
+        status('Primeiro gere uma rota.');
+        return;
+    }
+
+    const items = [...$('sequence').querySelectorAll('.delivery-item')];
+
+    // Recupera as cidades na nova ordem escolhida
+    const ordered = [
+        currentPoints[0],
+        ...items.map(li => currentPoints[Number(li.dataset.pointIndex)]),
+        currentPoints[currentPoints.length - 1]
+    ];
+
+    $('updateRoute').disabled = true;
+
+    status('Atualizando o percurso conforme a nova ordem...');
+
+    try {
+
+        // Solicita o novo trajeto rodoviário
+        const route = await getRoute(ordered);
+
+        // Limpa o mapa anterior
+        clearMap();
+
+        // Desenha o novo percurso
+        routeLayer = L.geoJSON(route.geometry,{
+            style:{
+                color:'#2359d6',
+                weight:5,
+                opacity:0.9
+            }
+        }).addTo(map);
+
+        // Atualiza os marcadores
+        ordered.forEach((p,i)=>{
+
+            const label =
+                i === 0 ? 'Partida' :
+                i === ordered.length-1 ? 'Chegada' :
+                'Entrega ' + i;
+
+            const icon = L.divIcon({
+                className:'',
+                html:'<div style="background:'+
+                    (i===0?'#18864b':i===ordered.length-1?'#d93025':'#245bd6')+
+                    ';color:white;border:2px solid white;border-radius:50%;width:27px;height:27px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:12px;box-shadow:0 1px 4px #555">'+
+                    (i===0?'S':i===ordered.length-1?'F':i)+
+                    '</div>',
+                iconSize:[27,27],
+                iconAnchor:[13,13]
+            });
+
+            markers.push(
+                L.marker([p.lat,p.lon],{icon})
+                .addTo(map)
+                .bindPopup('<b>'+label+'</b><br>'+p.name)
+            );
+
+        });
+
+        // Ajusta o enquadramento do mapa
+        map.fitBounds(routeLayer.getBounds(),{
+            padding:[35,35]
+        });
+
+        // Atualiza a distância
+        const km = route.distance / 1000;
+
+        $('distance').textContent =
+            km.toLocaleString('pt-BR',{
+                maximumFractionDigits:1
+            })+' km';
+
+        // Atualiza o tempo estimado
+        $('stopsCount').textContent =
+            (ordered.length-2)+
+            ' cidades de entrega • '+
+            Math.round(route.duration/3600*10)/10+
+            ' h estimadas de direção (sem paradas)';
+
+        // Atualiza a numeração da lista
+        items.forEach((li,i)=>{
+
+            const point = currentPoints[
+                Number(li.dataset.pointIndex)
+            ];
+
+            li.querySelector('.item-label').textContent =
+                'ENTREGA '+(i+1)+' — '+point.name;
+
+        });
+
+        // Atualiza o campo de cidades
+        $('stops').value =
+            ordered.slice(1,-1).map(p=>p.name).join('\n');
+
+        // Atualiza a sequência para copiar
+        window.currentSequence =
+            ordered.map((p,i)=>
+                (i+1)+'. '+p.name
+            ).join('\n');
+
+        status('Rota atualizada com a ordem escolhida manualmente.');
+
+    } catch(e){
+
+        status(e.message || 'Erro ao atualizar a rota.');
+
+    } finally {
+
+        $('updateRoute').disabled = false;
+
+    }
+
+}
+async function optimize(){
+ const origin=$('origin').value.trim(),dest=$('destination').value.trim(),stops=parseStops();
+ if(!origin||!dest){status('Informe a cidade de partida e a cidade de chegada.');return}
+ if(!stops.length){status('Adicione pelo menos uma cidade de entrega.');return}
+ if(stops.length>40){status('O limite deste protótipo é de 40 cidades de entrega por rota.');return}
+ const names=[origin,...stops,dest];
+ const normalizedStops=stops.map(s=>s.toLocaleLowerCase('pt-BR'));
+ const originKey=origin.toLocaleLowerCase('pt-BR'), destKey=dest.toLocaleLowerCase('pt-BR');
+ if(new Set(normalizedStops).size!==normalizedStops.length || normalizedStops.includes(originKey) || normalizedStops.includes(destKey)){status('Há cidades repetidas entre as entregas ou uma entrega coincide com a origem/destino. Revise a lista. A origem e a chegada podem ser a mesma cidade.');return}
+ $('optimize').disabled=true;$('result').style.display='none';clearMap();
+ try{
+  const points=[];
+  for(let i=0;i<names.length;i++){
+   status('Localizando cidade '+(i+1)+' de '+names.length+': '+names[i]);
+   const p=await geocode(names[i]);points.push(p);
+   if(i<names.length-1)await sleep(1050);
+  }
+  status('Calculando distâncias rodoviárias entre as cidades…');
+  const matrix=await getMatrix(points);
+  if(matrix.some(row=>row.some(v=>!Number.isFinite(v))))throw new Error('Uma ou mais cidades não possuem ligação rodoviária calculável. Confira os nomes e tente novamente.');
+  status('Otimizando a ordem das entregas…');
+  const order=twoOpt(nearestNeighbor(matrix,points.length),matrix);
+  const ordered=order.map(i=>points[i]);
+  status('Desenhando o percurso no mapa…');
+  const route=await getRoute(ordered);
+  routeLayer=L.geoJSON(route.geometry,{style:{color:'#2359d6',weight:5,opacity:.9}}).addTo(map);
+  ordered.forEach((p,i)=>{
+   const label=i===0?'Partida':i===ordered.length-1?'Chegada':String(i);
+   const icon=L.divIcon({className:'',html:'<div style="background:'+(i===0?'#18864b':i===ordered.length-1?'#d93025':'#245bd6')+';color:white;border:2px solid white;border-radius:50%;width:27px;height:27px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:12px;box-shadow:0 1px 4px #555">'+(i===0?'S':i===ordered.length-1?'F':i)+'</div>',iconSize:[27,27],iconAnchor:[13,13]});
+   markers.push(L.marker([p.lat,p.lon],{icon}).addTo(map).bindPopup('<b>'+label+'</b><br>'+p.name));
+  });
+  map.fitBounds(routeLayer.getBounds(),{padding:[35,35]});
+  const km=route.distance/1000;
+  $('distance').textContent=km.toLocaleString('pt-BR',{maximumFractionDigits:1})+' km';
+  $('stopsCount').textContent=stops.length+' cidades de entrega • '+Math.round(route.duration/3600*10)/10+' h estimadas de direção (sem paradas)';
+  $('sequence').innerHTML='';
+  // Guarda os pontos originais para permitir reorganização manual
+currentPoints = points;
+
+ordered.forEach((p,i)=>{
+    const li = document.createElement('li');
+
+    // Guarda a posição original da cidade
+    li.dataset.pointIndex = order[i];
+
+    if(i > 0 && i < ordered.length - 1) {
+
+        li.className = 'delivery-item';
+
+        const handle = document.createElement('span');
+        handle.className = 'drag-handle';
+        handle.textContent = '☰';
+
+        const label = document.createElement('span');
+        label.className = 'item-label';
+        label.textContent = 'ENTREGA ' + i + ' — ' + p.name;
+
+        li.appendChild(handle);
+        li.appendChild(label);
+
+    } else {
+
+        li.textContent = (
+            i === 0 ? 'PARTIDA — ' : 'CHEGADA — '
+        ) + p.name;
+
+    }
+
+    $('sequence').appendChild(li);
+});
+
+// Atualiza as cidades na ordem otimizada
+$('stops').value=ordered.slice(1,-1).map(p=>p.name).join('\n');
+
+$('result').style.display='block';
+  status('Rota calculada. Confira a sequência sugerida e o traçado no mapa.');
+  window.currentSequence=ordered.map((p,i)=>(i+1)+'. '+p.name).join('\n');
+ }catch(e){status(e.message||'Ocorreu um erro ao calcular a rota.');}
+ finally{$('optimize').disabled=false}
+}
+$('optimize').addEventListener('click',optimize);
+const sequenceList = $('sequence');
+
+new Sortable(sequenceList, {
+    animation: 200,
+    handle: '.drag-handle',
+    draggable: '.delivery-item',
+    ghostClass: 'sortable-ghost',
+    chosenClass: 'sortable-chosen',
+    forceFallback: true,
+    fallbackOnBody: true,
+    fallbackTolerance: 3,
+
+    onEnd: function() {
+        status('Ordem modificada! Clique em ATUALIZAR ROTA.');
+    }
+});
+// Conecta o botão ATUALIZAR ROTA
+$('updateRoute').addEventListener('click', function() {
+    updateManualRoute();
+});
+
+// Conecta o botão OTIMIZAR NOVAMENTE
+$('reoptimize').addEventListener('click', function() {
+    optimize();
+});
+async function updateManualRoute(){
+
+    if(!currentPoints){
+        status('Primeiro gere uma rota.');
+        return;
+    }
+
+    const items = [...$('sequence').querySelectorAll('.delivery-item')];
+
+    // Recupera as cidades na nova ordem escolhida
+    const ordered = [
+        currentPoints[0],
+        ...items.map(li => currentPoints[Number(li.dataset.pointIndex)]),
+        currentPoints[currentPoints.length - 1]
+    ];
+
+    $('updateRoute').disabled = true;
+
+    status('Atualizando o percurso conforme a nova ordem...');
+
+    try {
+
+        // Solicita o novo trajeto rodoviário
+        const route = await getRoute(ordered);
+
+        // Limpa o mapa anterior
+        clearMap();
+
+        // Desenha o novo percurso
+        routeLayer = L.geoJSON(route.geometry,{
+            style:{
+                color:'#2359d6',
+                weight:5,
+                opacity:0.9
+            }
+        }).addTo(map);
+
+        // Atualiza os marcadores
+        ordered.forEach((p,i)=>{
+
+            const label =
+                i === 0 ? 'Partida' :
+                i === ordered.length-1 ? 'Chegada' :
+                'Entrega ' + i;
+
+            const icon = L.divIcon({
+                className:'',
+                html:'<div style="background:'+
+                    (i===0?'#18864b':i===ordered.length-1?'#d93025':'#245bd6')+
+                    ';color:white;border:2px solid white;border-radius:50%;width:27px;height:27px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:12px;box-shadow:0 1px 4px #555">'+
+                    (i===0?'S':i===ordered.length-1?'F':i)+
+                    '</div>',
+                iconSize:[27,27],
+                iconAnchor:[13,13]
+            });
+
+            markers.push(
+                L.marker([p.lat,p.lon],{icon})
+                .addTo(map)
+                .bindPopup('<b>'+label+'</b><br>'+p.name)
+            );
+
+        });
+
+        // Ajusta o enquadramento do mapa
+        map.fitBounds(routeLayer.getBounds(),{
+            padding:[35,35]
+        });
+
+        // Atualiza a distância
+        const km = route.distance / 1000;
+
+        $('distance').textContent =
+            km.toLocaleString('pt-BR',{
+                maximumFractionDigits:1
+            })+' km';
+
+        // Atualiza o tempo estimado
+        $('stopsCount').textContent =
+            (ordered.length-2)+
+            ' cidades de entrega • '+
+            Math.round(route.duration/3600*10)/10+
+            ' h estimadas de direção (sem paradas)';
+
+        // Atualiza a numeração da lista
+        items.forEach((li,i)=>{
+
+            const point = currentPoints[
+                Number(li.dataset.pointIndex)
+            ];
+
+            li.querySelector('.item-label').textContent =
+                'ENTREGA '+(i+1)+' — '+point.name;
+
+        });
+
+        // Atualiza o campo de cidades
+        $('stops').value =
+            ordered.slice(1,-1).map(p=>p.name).join('\n');
+
+        // Atualiza a sequência para copiar
+        window.currentSequence =
+            ordered.map((p,i)=>
+                (i+1)+'. '+p.name
+            ).join('\n');
+
+        status('Rota atualizada com a ordem escolhida manualmente.');
+
+    } catch(e){
+
+        status(e.message || 'Erro ao atualizar a rota.');
+
+    } finally {
+
+        $('updateRoute').disabled = false;
+
+    }
+
+}
+$('example').addEventListener('click',()=>{$('origin').value='Fazenda Rio Grande, PR';$('stops').value='Guarulhos, SP\nCampinas, SP\nFranca, SP\nSão José do Rio Preto, SP';$('destination').value='Fazenda Rio Grande, PR';status('Exemplo carregado. Clique em OTIMIZAR ROTA.')});
+$('clear').addEventListener('click',()=>{$('stops').value='';$('result').style.display='none';clearMap();map.setView([-23.5,-51.5],6);status('Lista de entregas limpa.')});
+$('copy').addEventListener('click',async()=>{const text=window.currentSequence||'';try{await navigator.clipboard.writeText(text);status('Sequência copiada.')}catch(e){status('Não foi possível copiar automaticamente neste navegador. Selecione a sequência para copiar.')}});
+})();
+</script>
+</body>
+</html>
